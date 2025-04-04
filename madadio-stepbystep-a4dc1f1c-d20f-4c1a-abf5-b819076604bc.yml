@@ -1,0 +1,16 @@
+version: 1.0
+provider:
+  name: openfaas
+  gateway: https://ofs.u-code.io
+functions:
+  madadio-stepbystep-a4dc1f1c-d20f-4c1a-abf5-b819076604bc:
+    lang: go
+    handler: ./madadio-stepbystep-a4dc1f1c-d20f-4c1a-abf5-b819076604bc
+    image: gitlab.udevs.io:5050/ucode_functions_group/madadio-stepbystep-a4dc1f1c-d20f-4c1a-abf5-b819076604bc/madadio-stepbystep-a4dc1f1c-d20f-4c1a-abf5-b819076604bc:latest
+
+    constraints:
+    - "workload=openfaas-fn"
+    limits:
+      memory: 300Mi
+    requests:
+      memory: 5Mi
