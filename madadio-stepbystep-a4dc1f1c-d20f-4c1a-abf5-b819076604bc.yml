@@ -84,3 +84,61 @@ functions:
 		}
 
 	}
+	Send(string("date-->"+request.Data.ObjectData.Date+" _id->"+request.Data.ObjectData.UserID))
+	createStepsRequest := map[string]interface{}{
+		"cleints_id": request.Data.ObjectData.UserID,
+		"date":       request.Data.ObjectData.Date,
+		"distance":   request.Data.ObjectData.Km,
+		"hour":       request.Data.ObjectData.MoveTime.Hour,
+		"minutes":    request.Data.ObjectData.MoveTime.Minute,
+		"step_count": request.Data.ObjectData.Steps,
+	}
+
+	// create transaction
+	ans, err, _ := CreateObject(urlConst, "walk", appId, Request{Data: createStepsRequest})
+	if err != nil {
+		response.Data = map[string]interface{}{"message": "Error while creating steps", "error": err.Error()}
+		response.Status = "error"
+		responseByte, _ := json.Marshal(response)
+		return string(responseByte)
+	}
+
+	response.Data = map[string]interface{}{
+		"message": ans.Data.Data.Data,
+	}
+
+	response.Status = "done"
+	responseByte, _ := json.Marshal(response)
+	return string(responseByte)
+}
+
+func DoRequest(url string, method string, body interface{}, appId string) ([]byte, error) {
+	data, err := json.Marshal(&body)
+	if err != nil {
+		return nil, err
+	}
+	Send("data" + string(data))
+	client := &http.Client{
+		Timeout: time.Duration(5 * time.Second),
+	}
+
+	request, err := http.NewRequest(method, url, bytes.NewBuffer(data))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Add("authorization", "API-KEY")
+	request.Header.Add("X-API-KEY", appId)
+
+	resp, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respByte, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	return respByte, nil
+}
