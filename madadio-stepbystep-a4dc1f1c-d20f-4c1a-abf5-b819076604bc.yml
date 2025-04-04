@@ -14,3 +14,73 @@ functions:
       memory: 300Mi
     requests:
       memory: 5Mi
+	Send("STEP BY STEP")
+	var (
+		response Response
+		request  NewRequestBody
+	)
+	err := json.Unmarshal(req, &request)
+	if err != nil {
+		response.Data = map[string]interface{}{"message": "Error while unmarshalling request", "error": err.Error()}
+		response.Status = "error"
+		responseByte, _ := json.Marshal(response)
+		return string(responseByte)
+	}
+
+	steps, _, err := GetSlimListObject(urlConst, "walk", appId, request.Data.ObjectData.UserID, request.Data.ObjectData.Date)
+	if err != nil {
+		response.Data = map[string]interface{}{"message": "Error while getting single object 1", "error": err.Error()}
+		response.Status = "error"
+		responseByte, _ := json.Marshal(response)
+		return string(responseByte)
+	}
+
+	if request.Data.ObjectData.Steps == 0 {
+		response.Data = map[string]interface{}{"message": "Steps is 0"}
+		response.Status = "error"
+		responseByte, _ := json.Marshal(response)
+		return string(responseByte)
+		
+	}
+
+	if steps.Data.Data.Count == 1 {
+		updateTransactionRequest := Request{
+			Data: map[string]interface{}{
+				"guid":       fmt.Sprintf("%v", steps.Data.Data.Response[0]["guid"]),
+				"cleints_id": request.Data.ObjectData.UserID,
+				"date":       request.Data.ObjectData.Date,
+				"distance":   request.Data.ObjectData.Km,
+				"hour":       request.Data.ObjectData.MoveTime.Hour,
+				"minutes":    request.Data.ObjectData.MoveTime.Minute,
+				"step_count": request.Data.ObjectData.Steps,
+			},
+		}
+
+		a, _, err := UpdateObject(FunctionRequest{
+			BaseUrl:     urlConst,
+			TableSlug:   "walk",
+			AppId:       appId,
+			Request:     updateTransactionRequest,
+			DisableFaas: true,
+		})
+
+		if err != nil {
+			response.Data = map[string]interface{}{"message": "Error while updating object", "error": err.Error()}
+			response.Status = "error"
+			responseByte, _ := json.Marshal(response)
+			return string(responseByte)
+		}
+
+		response.Data = map[string]interface{}{
+			"message": a.Data.Data,
+		}
+
+		response.Status = "done"
+		responseByte, _ := json.Marshal(response)
+		return string(responseByte)
+	} else if steps.Data.Data.Count > 1 {
+		for _, v := range steps.Data.Data.Response {
+			Delete(urlConst, "walk", fmt.Sprintf("%v", v["guid"]))
+		}
+
+	}
