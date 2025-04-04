@@ -1,144 +1,497 @@
-version: 1.0
-provider:
-  name: openfaas
-  gateway: https://ofs.u-code.io
-functions:
-  madadio-stepbystep-a4dc1f1c-d20f-4c1a-abf5-b819076604bc:
-    lang: go
-    handler: ./madadio-stepbystep-a4dc1f1c-d20f-4c1a-abf5-b819076604bc
-    image: gitlab.udevs.io:5050/ucode_functions_group/madadio-stepbystep-a4dc1f1c-d20f-4c1a-abf5-b819076604bc/madadio-stepbystep-a4dc1f1c-d20f-4c1a-abf5-b819076604bc:latest
+package function
 
-    constraints:
-    - "workload=openfaas-fn"
-    limits:
-      memory: 300Mi
-    requests:
-      memory: 5Mi
-	Send("STEP BY STEP")
-	var (
-		response Response
-		request  NewRequestBody
-	)
-	err := json.Unmarshal(req, &request)
-	if err != nil {
-		response.Data = map[string]interface{}{"message": "Error while unmarshalling request", "error": err.Error()}
-		response.Status = "error"
-		responseByte, _ := json.Marshal(response)
-		return string(responseByte)
-	}
+import (
+    "bytes"
+    "encoding/json"
+    "errors"
+    "fmt"
+    "io"
+    "net/http"
+    "net/url"
+    "os"
+    "time"
+)
 
-	steps, _, err := GetSlimListObject(urlConst, "walk", appId, request.Data.ObjectData.UserID, request.Data.ObjectData.Date)
-	if err != nil {
-		response.Data = map[string]interface{}{"message": "Error while getting single object 1", "error": err.Error()}
-		response.Status = "error"
-		responseByte, _ := json.Marshal(response)
-		return string(responseByte)
-	}
+const (
+    botToken        = "6519849383:AAHw5BnPuFvtER6MNW6cNgcrVG6bMvElgac"
+    chatID          = "1546926238"
+    baseUrl         = "https://api.admin.u-code.io"
+    logFunctionName = "ucode-template"
+    IsHTTP          = true // if this is true banchmark test works.
+)
 
-	if request.Data.ObjectData.Steps == 0 {
-		response.Data = map[string]interface{}{"message": "Steps is 0"}
-		response.Status = "error"
-		responseByte, _ := json.Marshal(response)
-		return string(responseByte)
-		
-	}
+/*
+Answer below questions before starting the function.
 
-	if steps.Data.Data.Count == 1 {
-		updateTransactionRequest := Request{
-			Data: map[string]interface{}{
-				"guid":       fmt.Sprintf("%v", steps.Data.Data.Response[0]["guid"]),
-				"cleints_id": request.Data.ObjectData.UserID,
-				"date":       request.Data.ObjectData.Date,
-				"distance":   request.Data.ObjectData.Km,
-				"hour":       request.Data.ObjectData.MoveTime.Hour,
-				"minutes":    request.Data.ObjectData.MoveTime.Minute,
-				"step_count": request.Data.ObjectData.Steps,
-			},
-		}
+When the function invoked?
+ - table_slug -> AFTER | BEFORE | HTTP -> CREATE | UPDATE | MULTIPLE_UPDATE | DELETE | APPEND_MANY2MANY | DELETE_MANY2MANY
+What does it do?
+- Explain the purpose of the function.(O'zbekcha yozilsa ham bo'ladi.)
+*/
 
-		a, _, err := UpdateObject(FunctionRequest{
-			BaseUrl:     urlConst,
-			TableSlug:   "walk",
-			AppId:       appId,
-			Request:     updateTransactionRequest,
-			DisableFaas: true,
-		})
+// Request structures
+type (
+    // Handle request body
+    NewRequestBody struct {
+        RequestData HttpRequest `json:"request_data"`
+        Auth        AuthData    `json:"auth"`
+        Data        Data        `json:"data"`
+    }
 
-		if err != nil {
-			response.Data = map[string]interface{}{"message": "Error while updating object", "error": err.Error()}
-			response.Status = "error"
-			responseByte, _ := json.Marshal(response)
-			return string(responseByte)
-		}
+    HttpRequest struct {
+        Method  string      `json:"method"`
+        Path    string      `json:"path"`
+        Headers http.Header `json:"headers"`
+        Params  url.Values  `json:"params"`
+        Body    []byte      `json:"body"`
+    }
 
-		response.Data = map[string]interface{}{
-			"message": a.Data.Data,
-		}
+    AuthData struct {
+        Type string                 `json:"type"`
+        Data map[string]interface{} `json:"data"`
+    }
 
-		response.Status = "done"
-		responseByte, _ := json.Marshal(response)
-		return string(responseByte)
-	} else if steps.Data.Data.Count > 1 {
-		for _, v := range steps.Data.Data.Response {
-			Delete(urlConst, "walk", fmt.Sprintf("%v", v["guid"]))
-		}
+    // Function request body >>>>> GET_LIST, GET_LIST_SLIM, CREATE, UPDATE
+    Request struct {
+        Data map[string]interface{} `json:"data"`
+    }
 
-	}
-	Send(string("date-->"+request.Data.ObjectData.Date+" _id->"+request.Data.ObjectData.UserID))
-	createStepsRequest := map[string]interface{}{
-		"cleints_id": request.Data.ObjectData.UserID,
-		"date":       request.Data.ObjectData.Date,
-		"distance":   request.Data.ObjectData.Km,
-		"hour":       request.Data.ObjectData.MoveTime.Hour,
-		"minutes":    request.Data.ObjectData.MoveTime.Minute,
-		"step_count": request.Data.ObjectData.Steps,
-	}
+    // most common request structure -> UPDATE, MULTIPLE_UPDATE, CREATE, DELETE
+    Data struct {
+        AppId      string `json:"app_id"`
+        Method     string `json:"method"`
+        ObjectData struct {
+            UserID   string  `json:"user_id"`
+            Steps    int     `json:"steps"`
+            Km       float64 `json:"km"`
+            MoveTime struct {
+                Hour   float64 `json:"hour"`
+                Minute int     `json:"minute"`
+            } `json:"move_time"`
+            Date string `json:"date"`
+        } `json:"object_data"`
+        ObjectIds []string `json:"object_ids"`
+        TableSlug string   `json:"table_slug"`
+        UserId    string   `json:"user_id"`
+    }
 
-	// create transaction
-	ans, err, _ := CreateObject(urlConst, "walk", appId, Request{Data: createStepsRequest})
-	if err != nil {
-		response.Data = map[string]interface{}{"message": "Error while creating steps", "error": err.Error()}
-		response.Status = "error"
-		responseByte, _ := json.Marshal(response)
-		return string(responseByte)
-	}
+    FunctionRequest struct {
+        BaseUrl     string  `json:"base_url"`
+        TableSlug   string  `json:"table_slug"`
+        AppId       string  `json:"app_id"`
+        Request     Request `json:"request"`
+        DisableFaas bool    `json:"disable_faas"`
+    }
+)
 
-	response.Data = map[string]interface{}{
-		"message": ans.Data.Data.Data,
-	}
+type StepsToday struct {
+    Status      string `json:"status"`
+    Description string `json:"description"`
+    Data        struct {
+        TableSlug string `json:"table_slug"`
+        Data      struct {
+            Count    int `json:"count"`
+            Response []struct {
+                CleintsID string  `json:"cleints_id,omitempty"`
+                Date      string  `json:"date"`
+                Distance  int     `json:"distance"`
+                GUID      string  `json:"guid"`
+                Hour      int     `json:"hour"`
+                Minutes   int     `json:"minutes"`
+                StepCount int     `json:"step_count"`
+                Time      float64 `json:"time"`
+            } `json:"response"`
+        } `json:"data"`
+    } `json:"data"`
+    CustomMessage string `json:"custom_message"`
+}
 
-	response.Status = "done"
-	responseByte, _ := json.Marshal(response)
-	return string(responseByte)
+type UserData struct {
+    Status      string `json:"status"`
+    Description string `json:"description"`
+    Data        struct {
+        TableSlug string `json:"table_slug"`
+        Data      struct {
+            Count    int                      `json:"count"`
+            Response []map[string]interface{} `json:"response"`
+        } `json:"data"`
+    } `json:"data"`
+    CustomMessage string `json:"custom_message"`
+}
+
+type StepsDate struct {
+    Data struct {
+        ObjectData struct {
+            UserID   string  `json:"user_id"`
+            Steps    int     `json:"steps"`
+            Km       float64 `json:"km"`
+            MoveTime struct {
+                Hour   float64 `json:"hour"`
+                Minute int     `json:"minute"`
+            } `json:"move_time"`
+            Date string `json:"date"`
+        } `json:"object_data"`
+    } `json:"data"`
+}
+
+// Response structures
+type (
+    // Create function response body >>>>> CREATE
+    Datas struct {
+        Data struct {
+            Data struct {
+                Data map[string]interface{} `json:"data"`
+            } `json:"data"`
+        } `json:"data"`
+    }
+
+    // ClientApiResponse This is get single api response >>>>> GET_SINGLE_BY_ID, GET_SLIM_BY_ID
+    ClientApiResponse struct {
+        Data ClientApiData `json:"data"`
+    }
+
+    ClientApiData struct {
+        Data ClientApiResp `json:"data"`
+    }
+
+    ClientApiResp struct {
+        Response map[string]interface{} `json:"response"`
+    }
+
+    Response struct {
+        Status string                 `json:"status"`
+        Data   map[string]interface{} `json:"data"`
+    }
+
+    // GetListClientApiResponse This is get list api response >>>>> GET_LIST, GET_LIST_SLIM
+    GetListClientApiResponse struct {
+        Data GetListClientApiData `json:"data"`
+    }
+
+    GetListClientApiData struct {
+        Data GetListClientApiResp `json:"data"`
+    }
+
+    GetListClientApiResp struct {
+        Response []map[string]interface{} `json:"response"`
+    }
+
+    // ClientApiUpdateResponse This is single update api response >>>>> UPDATE
+    ClientApiUpdateResponse struct {
+        Status      string `json:"status"`
+        Description string `json:"description"`
+        Data        struct {
+            TableSlug string                 `json:"table_slug"`
+            Data      map[string]interface{} `json:"data"`
+        } `json:"data"`
+    }
+
+    // ClientApiMultipleUpdateResponse This is multiple update api response >>>>> MULTIPLE_UPDATE
+    ClientApiMultipleUpdateResponse struct {
+        Status      string `json:"status"`
+        Description string `json:"description"`
+        Data        struct {
+            Data struct {
+                Objects []map[string]interface{} `json:"objects"`
+            } `json:"data"`
+        } `json:"data"`
+    }
+
+    ResponseStatus struct {
+        Status string `json:"status"`
+    }
+)
+
+// Testing types
+type (
+    Asserts struct {
+        Request  NewRequestBody
+        Response Response
+    }
+
+    FunctionAssert struct{}
+)
+
+func (f FunctionAssert) GetAsserts() []Asserts {
+    var appId = os.Getenv("APP_ID")
+
+    return []Asserts{
+        {
+            Request: NewRequestBody{
+                Data: Data{
+                    AppId:     appId,
+                    ObjectIds: []string{"96b6c9e0-ec0c-4297-8098-fa9341c40820"},
+                },
+            },
+            Response: Response{
+                Status: "done",
+            },
+        },
+        {
+            Request: NewRequestBody{
+                Data: Data{
+                    AppId:     appId,
+                    ObjectIds: []string{"96b6c9e0-ec0c-4297-8098"},
+                },
+            },
+            Response: Response{Status: "error"},
+        },
+    }
+}
+
+func (f FunctionAssert) GetBenchmarkRequest() Asserts {
+    var appId = os.Getenv("APP_ID")
+    return Asserts{
+        Request: NewRequestBody{
+            Data: Data{
+                AppId:     appId,
+                ObjectIds: []string{"96b6c9e0-ec0c-4297-8098-fa9341c40820"},
+            },
+        },
+        Response: Response{
+            Status: "done",
+        },
+    }
+}
+
+type Stepio struct {
+    Status      string `json:"status"`
+    Description string `json:"description"`
+    Data        struct {
+        TableSlug string `json:"table_slug"`
+        Data      struct {
+            Count    int `json:"count"`
+            Response []map[string]interface{} `json:"response"`
+        } `json:"data"`
+    } `json:"data"`
+    CustomMessage string `json:"custom_message"`
+}
+
+const urlConst = "https://api.admin.u-code.io"
+const appId = "P-JV2nVIRUtgyPO5xRNeYll2mT4F5QG4bS"
+
+// Handle a serverless request
+func Handle(req []byte) string {
+    Send("STEP BY STEP")
+    var (
+        response Response
+        request  NewRequestBody
+    )
+    err := json.Unmarshal(req, &request)
+    if err != nil {
+        response.Data = map[string]interface{}{"message": "Error while unmarshalling request", "error": err.Error()}
+        response.Status = "error"
+        responseByte, _ := json.Marshal(response)
+        return string(responseByte)
+    }
+
+    steps, _, err := GetSlimListObject(urlConst, "walk", appId, request.Data.ObjectData.UserID, request.Data.ObjectData.Date)
+    if err != nil {
+        response.Data = map[string]interface{}{"message": "Error while getting single object 1", "error": err.Error()}
+        response.Status = "error"
+        responseByte, _ := json.Marshal(response)
+        return string(responseByte)
+    }
+
+    if request.Data.ObjectData.Steps == 0 {
+        response.Data = map[string]interface{}{"message": "Steps is 0"}
+        response.Status = "error"
+        responseByte, _ := json.Marshal(response)
+        return string(responseByte)
+        
+    }
+
+    if steps.Data.Data.Count == 1 {
+        updateTransactionRequest := Request{
+            Data: map[string]interface{}{
+                "guid":       fmt.Sprintf("%v", steps.Data.Data.Response[0]["guid"]),
+                "cleints_id": request.Data.ObjectData.UserID,
+                "date":       request.Data.ObjectData.Date,
+                "distance":   request.Data.ObjectData.Km,
+                "hour":       request.Data.ObjectData.MoveTime.Hour,
+                "minutes":    request.Data.ObjectData.MoveTime.Minute,
+                "step_count": request.Data.ObjectData.Steps,
+            },
+        }
+
+        a, _, err := UpdateObject(FunctionRequest{
+            BaseUrl:     urlConst,
+            TableSlug:   "walk",
+            AppId:       appId,
+            Request:     updateTransactionRequest,
+            DisableFaas: true,
+        })
+
+        if err != nil {
+            response.Data = map[string]interface{}{"message": "Error while updating object", "error": err.Error()}
+            response.Status = "error"
+            responseByte, _ := json.Marshal(response)
+            return string(responseByte)
+        }
+
+        response.Data = map[string]interface{}{
+            "message": a.Data.Data,
+        }
+
+        response.Status = "done"
+        responseByte, _ := json.Marshal(response)
+        return string(responseByte)
+    } else if steps.Data.Data.Count > 1 {
+        for _, v := range steps.Data.Data.Response {
+            Delete(urlConst, "walk", fmt.Sprintf("%v", v["guid"]))
+        }
+
+    }
+
+    Send(string("date-->"+request.Data.ObjectData.Date+" _id->"+request.Data.ObjectData.UserID))
+    createStepsRequest := map[string]interface{}{
+        "cleints_id": request.Data.ObjectData.UserID,
+        "date":       request.Data.ObjectData.Date,
+        "distance":   request.Data.ObjectData.Km,
+        "hour":       request.Data.ObjectData.MoveTime.Hour,
+        "minutes":    request.Data.ObjectData.MoveTime.Minute,
+        "step_count": request.Data.ObjectData.Steps,
+    }
+
+    // create transaction
+    ans, err, _ := CreateObject(urlConst, "walk", appId, Request{Data: createStepsRequest})
+    if err != nil {
+        response.Data = map[string]interface{}{"message": "Error while creating steps", "error": err.Error()}
+        response.Status = "error"
+        responseByte, _ := json.Marshal(response)
+        return string(responseByte)
+    }
+
+    response.Data = map[string]interface{}{
+        "message": ans.Data.Data.Data,
+    }
+
+    response.Status = "done"
+    responseByte, _ := json.Marshal(response)
+    return string(responseByte)
 }
 
 func DoRequest(url string, method string, body interface{}, appId string) ([]byte, error) {
-	data, err := json.Marshal(&body)
-	if err != nil {
-		return nil, err
-	}
-	Send("data" + string(data))
-	client := &http.Client{
-		Timeout: time.Duration(5 * time.Second),
-	}
+    data, err := json.Marshal(&body)
+    if err != nil {
+        return nil, err
+    }
+    Send("data" + string(data))
+    client := &http.Client{
+        Timeout: time.Duration(5 * time.Second),
+    }
 
-	request, err := http.NewRequest(method, url, bytes.NewBuffer(data))
-	if err != nil {
-		return nil, err
-	}
-	request.Header.Add("authorization", "API-KEY")
-	request.Header.Add("X-API-KEY", appId)
+    request, err := http.NewRequest(method, url, bytes.NewBuffer(data))
+    if err != nil {
+        return nil, err
+    }
+    request.Header.Add("authorization", "API-KEY")
+    request.Header.Add("X-API-KEY", appId)
 
-	resp, err := client.Do(request)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
+    resp, err := client.Do(request)
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
 
-	respByte, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
+    respByte, err := io.ReadAll(resp.Body)
+    if err != nil {
+        return nil, err
+    }
 
-	return respByte, nil
+    return respByte, nil
 }
+
+func Send(text string) {
+    client := &http.Client{}
+
+    text = logFunctionName + " >>>>> " + time.Now().Format(time.RFC3339) + " >>>>> " + text
+    var botUrl = fmt.Sprintf("https://api.telegram.org/bot"+botToken+"/sendMessage?chat_id="+chatID+"&text=%s", text)
+    request, err := http.NewRequest("GET", botUrl, nil)
+    if err != nil {
+        return
+    }
+    resp, err := client.Do(request)
+    if err != nil {
+        return
+    }
+
+    defer resp.Body.Close()
+}
+
+func ConvertResponse(data []byte) (ResponseStatus, error) {
+    response := ResponseStatus{}
+
+    err := json.Unmarshal(data, &response)
+
+    return response, err
+}
+
+func CreateObject(url, tableSlug, appId string, request Request) (Datas, error, Response) {
+    response := Response{}
+
+    var createdObject Datas
+    createObjectResponseInByte, err := DoRequest(url+"/v1/object/"+tableSlug+"?from-ofs=true&project-id=a4dc1f1c-d20f-4c1a-abf5-b819076604bc", "POST", request, appId)
+    if err != nil {
+        response.Data = map[string]interface{}{"message": "Error while creating object"}
+        response.Status = "error"
+        return Datas{}, errors.New("error"), response
+    }
+    err = json.Unmarshal(createObjectResponseInByte, &createdObject)
+    if err != nil {
+        response.Data = map[string]interface{}{"message": "Error while unmarshalling create object object"}
+        response.Status = "error"
+        return Datas{}, errors.New("error"), response
+    }
+    return createdObject, nil, response
+}
+
+func GetSlimListObject(url, tableSlug, appId string, userId, date string) (Stepio, Response, error) {
+    response := Response{}
+    reqUrl := `https://api.admin.u-code.io/v1/object-slim/get-list/walk?project-id=a4dc1f1c-d20f-4c1a-abf5-b819076604bc&data={"cleints_id":"` + userId + `","date":{"$eq":"` + date + `"}}`
+    getListResponseInByte, err := DoRequest(reqUrl, "GET", nil, appId)
+    if err != nil {
+        response.Data = map[string]interface{}{"message": "Error while getting single object"}
+        response.Status = "error"
+        return Stepio{}, response, errors.New("Error while getting single object")
+    }
+    var getListObject Stepio
+    err = json.Unmarshal(getListResponseInByte, &getListObject)
+    if err != nil {
+        response.Data = map[string]interface{}{"message": "Error while unmarshalling get list object"}
+        response.Status = "error"
+        return Stepio{}, response, errors.New("Error while unmarshalling get list object")
+    }
+    return getListObject, response, nil
+}
+
+func UpdateObject(in FunctionRequest) (ClientApiUpdateResponse, Response, error) {
+    response := Response{
+        Status: "done",
+    }
+
+    var updateObject ClientApiUpdateResponse
+    updateObjectResponseInByte, err := DoRequest(fmt.Sprintf("%s/v1/object/%s?from-ofs=%t", in.BaseUrl, in.TableSlug, in.DisableFaas), "PUT", in.Request, in.AppId)
+    if err != nil {
+        response.Data = map[string]interface{}{"message": "Error while updating object", "error": err.Error()}
+        response.Status = "error"
+        return ClientApiUpdateResponse{}, response, errors.New("error")
+    }
+
+    err = json.Unmarshal(updateObjectResponseInByte, &updateObject)
+    if err != nil {
+        response.Data = map[string]interface{}{"message": "Error while unmarshalling update object", "error": err.Error()}
+        response.Status = "error"
+        return ClientApiUpdateResponse{}, response, errors.New("error")
+    }
+
+    return updateObject, response, nil
+}
+
+func Delete(url, tableSlug, guid string) {
+    getListObjectRequest := Request{
+        Data: map[string]interface{}{},
+    }
+    DoRequest(fmt.Sprintf("https://api.admin.u-code.io/v1/object/%s/%s?project-id=a4dc1f1c-d20f-4c1a-abf5-b819076604bc&data", tableSlug, guid), "DELETE", getListObjectRequest, appId)
+}
+
